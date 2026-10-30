@@ -1,296 +1,252 @@
 /* ==========================================================
    BIGX · KOC BOOKING HUB · app.js
-   Toàn bộ logic: nạp dữ liệu, lọc, KPI, biểu đồ, bảng.
-   Mục lục:
-     1. Tiện ích ngày & số
-     2. Nạp + chuẩn hoá dữ liệu
-     3. Bộ lọc (thời gian, kênh, chiến dịch, phụ trách, lọc chéo)
-     4. Biểu đồ (khởi tạo)
-     5. Tab Tổng quan
-     6. Tab CTV & Booking
-     7. Tab Hiệu suất
-     8. Tab Đối soát kế toán
-     9. Tab Xuất file, điều hướng, khởi động
+   Logic các tab số liệu. Mục lục:
+     1. Tiện ích ngày & số        2. Nạp + chuẩn hoá dữ liệu
+     3. Bộ lọc thời gian / kênh    4. Thành phần dùng chung (KPI, nhận định, biểu đồ)
+     5. Tổng quan                  6. Hiệu suất CTV
+     7. Đối soát                   8. CTV & Booking
+     9. Xuất file, điều hướng, khởi động
+   Tab "Công việc của tôi" nằm ở tasks.js
    ========================================================== */
 (function () {
-const CFG = window.KOC_CONFIG, KENH = CFG.kenh, KC = CFG.mauKenh, ST = CFG.trangThai;
-const STC = ["t-mute", "t-info", "t-warn", "t-warn", "t-ok", "t-bad"], STCOL = ["#A3AED0", "#BF83FF", "#FFCF00", "#FF947A", "#3CD856", "#FA5A7D"];
+const CFG = window.KOC_CONFIG, KENH = CFG.kenh, ST = CFG.trangThai, ROI_T = CFG.mucTieuROI || 2, ONT = CFG.mucTieuDungHan || 90, WAIT = CFG.nguongChoThanhToan || 30;
 const $ = id => document.getElementById(id);
 
 /* ===== 1. Tiện ích ngày & số ===== */
-// Ngày được lưu dạng số nguyên: số ngày tính từ 01/01/2020
 const D0 = Date.UTC(2020, 0, 1), DAY = 864e5;
-const fromIso = s => s ? Math.round((Date.parse(String(s).slice(0, 10) + "T00:00:00Z") - D0) / DAY) : null;
-const dd = i => new Date(D0 + i * DAY), iso = i => dd(i).toISOString().slice(0, 10);
+const fromIso = s => s ? Math.round((Date.parse(String(s).slice(0, 10) + "T00:00:00Z") - D0) / DAY) : null, dd = i => new Date(D0 + i * DAY), iso = i => dd(i).toISOString().slice(0, 10);
 const fmt = i => { const d = dd(i); return String(d.getUTCDate()).padStart(2, "0") + "/" + String(d.getUTCMonth() + 1).padStart(2, "0"); };
-const fmtY = i => fmt(i) + "/" + dd(i).getUTCFullYear();
-const now = new Date(), TODAY_ISO = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
-const TODAY = fromIso(TODAY_ISO);
-const vnd = n => Math.round(n || 0).toLocaleString("vi-VN"), m = n => ((n || 0) / 1e6).toLocaleString("vi-VN", { maximumFractionDigits: 1 }) + "tr";
-const sum = (a, k) => a.reduce((x, b) => x + (b[k] || 0), 0), act = a => a.filter(b => b.st < 5);
+const n0 = new Date(), TISO = n0.getFullYear() + "-" + String(n0.getMonth() + 1).padStart(2, "0") + "-" + String(n0.getDate()).padStart(2, "0"), TODAY = fromIso(TISO);
+const vnd = n => Math.round(n || 0).toLocaleString("vi-VN"), m = n => ((n || 0) / 1e6).toLocaleString("vi-VN", { maximumFractionDigits: 1 }) + " tr";
+const pct = x => (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(0) + "%", r2 = x => (x || 0).toFixed(2).replace(".", ",");
+const sum = (a, k) => a.reduce((x, b) => x + (+b[k] || 0), 0), act = a => a.filter(b => b.st < 5);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const toast = t => { const e = $("toast"); e.textContent = t; e.classList.add("on"); clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove("on"), 2200); };
+const groupBy = (a, f) => { const M = new Map(); a.forEach(x => { const k = f(x); if (!M.has(k)) M.set(k, []); M.get(k).push(x); }); return M; };
 
 /* ===== 2. Nạp + chuẩn hoá dữ liệu ===== */
-let ctv = [], bk = [], tt = [], PLAN = {}, CAMP = [], NS = [], START = TODAY - 365, DEMO = false;
+let ctv = [], bk = [], tt = [], PLAN = {}, NS = [], START = TODAY - 365, DEMO = false;
 function load(raw) {
   PLAN = raw.nganSachThang || CFG.nganSachThang || {};
   const byMa = new Map();
-  ctv = (raw.ctv || []).map(x => {
-    const c = { id: x.ma, ten: x.hoTen || "", sdt: String(x.sdt || "").replace(/\s/g, ""), kenh: x.kenh || "", fl: +x.follower || 0, nganh: x.nganh || "",
-      rate: +x.rateCard || 0, stk: !!x.stk, cccd: !!x.cccd, tt: x.trangThai || "Active", ns: x.phuTrach || "", on: x.ngayOnboard || "" };
-    byMa.set(c.id, c); return c;
-  });
-  const sdtCount = new Map(); ctv.forEach(c => c.sdt && sdtCount.set(c.sdt, (sdtCount.get(c.sdt) || 0) + 1));
-  ctv.forEach(c => c.dup = c.sdt && sdtCount.get(c.sdt) > 1);
+  ctv = (raw.ctv || []).map(x => { const c = { id: x.ma, ten: x.hoTen || "", sdt: String(x.sdt || "").replace(/\s/g, ""), kenh: x.kenh || "", fl: +x.follower || 0, nganh: x.nganh || "", rate: +x.rateCard || 0,
+    stk: !!x.stk, cccd: !!x.cccd, tt: x.trangThai || "Active", ns: x.phuTrach || "" }; byMa.set(c.id, c); return c; });
+  const sc = new Map(); ctv.forEach(c => c.sdt && sc.set(c.sdt, (sc.get(c.sdt) || 0) + 1)); ctv.forEach(c => c.dup = !!c.sdt && sc.get(c.sdt) > 1);
   bk = (raw.booking || []).map(x => {
-    const c = byMa.get(x.maCTV) || { id: x.maCTV || "?", ten: "(Không có trong danh sách CTV)", kenh: "", ns: "", missing: true };
+    const c = byMa.get(x.maCTV) || { id: x.maCTV || "?", ten: "(không có hồ sơ)", kenh: "", ns: "", missing: true };
     const st = Math.max(0, ST.indexOf(x.trangThai)), dl = fromIso(x.deadline), dp = fromIso(x.ngayDang);
-    const tre = dl != null && ((dp != null && dp > dl) || (dp == null && st < 2 && TODAY > dl));
-    return { id: x.ma, c, camp: x.chienDich || "", day: fromIso(x.ngayBook) ?? TODAY, st, cost: +x.chiPhi || 0, view: +x.view || 0, eng: +x.tuongTac || 0, don: +x.don || 0, gmv: +x.gmv || 0, tre };
+    return { id: x.ma, c, camp: x.chienDich || "", day: fromIso(x.ngayBook) ?? TODAY, st, cost: +x.chiPhi || 0, view: +x.view || 0, don: +x.don || 0, gmv: +x.gmv || 0,
+      posted: st >= 1 && st < 5, tre: dl != null && ((dp != null && dp > dl) || (dp == null && st < 2 && TODAY > dl)), late0: dp == null && st < 2 && dl != null && TODAY > dl };
   }).sort((a, b) => b.day - a.day);
   tt = raw.thanhToan || [];
-  CAMP = [...new Set(bk.map(b => b.camp).filter(Boolean))];
   NS = [...new Set(ctv.map(c => c.ns).filter(Boolean))];
   START = bk.length ? Math.min(...bk.map(b => b.day)) : TODAY - 365;
-  $("fC").innerHTML = '<option value="">Tất cả chiến dịch</option>' + CAMP.map(x => `<option>${esc(x)}</option>`).join("");
   $("fN").innerHTML = '<option value="">Tất cả phụ trách</option>' + NS.map(x => `<option>${esc(x)}</option>`).join("");
   $("dF").min = $("dT").min = iso(START); $("dF").max = $("dT").max = iso(TODAY);
-  rStatus();
-}
-function rStatus() {
   const e = $("status");
   if (DEMO) { e.className = "status demo"; e.innerHTML = `Đang xem DATA MẪU (giả) để thử giao diện. <button id="stB">Tắt data mẫu</button>`; }
-  else if (!bk.length && !ctv.length) { e.className = "status"; e.innerHTML = `Chưa có dữ liệu. Web đang ở trạng thái trống. <button id="stB">Xem data mẫu</button>`; }
-  else { e.className = "status"; e.innerHTML = `Dữ liệu: ${ctv.length} CTV · ${bk.length} booking`; return; }
-  $("stB").onclick = () => { DEMO = !DEMO; load(DEMO ? window.makeDemoData(TODAY_ISO) : window.KOC_DATA); Object.assign(F, { k: "", c: "", n: "", st: null, ctv: null }); setPre(CFG.mocMacDinh); };
+  else if (!bk.length && !ctv.length) { e.className = "status"; e.innerHTML = `Chưa có dữ liệu, web đang ở trạng thái trống. <button id="stB">Xem data mẫu</button>`; }
+  else { e.className = "status"; e.innerHTML = `Dữ liệu: ${ctv.length} CTV · ${bk.length} booking`; }
+  if ($("stB")) $("stB").onclick = () => { DEMO = !DEMO; load(DEMO ? window.makeDemoData(TISO) : window.KOC_DATA); Object.assign(S, { k: "", n: "" }); selCtv = null; setPre(CFG.mocMacDinh || "30"); };
 }
 
 /* ===== 3. Bộ lọc ===== */
-const F = { from: TODAY - 29, to: TODAY, pre: "30", k: "", c: "", n: "", st: null, ctv: null }, NUL = { st: null, ctv: null };
-function flt(ex = [], o = {}) {
-  const f = { ...F }; ex.forEach(k => f[k] = k in NUL ? null : ""); Object.assign(f, o);
-  return bk.filter(b => b.day >= f.from && b.day <= f.to && (!f.k || b.c.kenh == f.k) && (!f.c || b.camp == f.c) && (!f.n || b.c.ns == f.n) && (f.st === null || b.st == f.st) && (!f.ctv || b.c === f.ctv));
-}
-const prevF = () => { const L = F.to - F.from + 1; return { from: F.from - L, to: F.from - 1 }; };
-function tog(k, v) { F[k] = F[k] === v ? (k in NUL ? null : "") : v; renderAll(); }
-function setPre(p) {
-  F.pre = p;
-  if (p == "all") { F.from = START; F.to = TODAY; }
-  else if (p == "m") { const d = dd(TODAY); F.from = fromIso(d.toISOString().slice(0, 8) + "01"); F.to = TODAY; }
-  else { F.from = TODAY - (+p) + 1; F.to = TODAY; }
-  renderAll();
-}
+const S = { from: TODAY - 29, to: TODAY, pre: "30", k: "", n: "" };
+const sel = (o = {}) => { const f = { ...S, ...o }; return bk.filter(b => b.day >= f.from && b.day <= f.to && (!f.k || b.c.kenh == f.k) && (!f.n || b.c.ns == f.n)); };
+const prev = () => { const L = S.to - S.from + 1; return { from: S.from - L, to: S.from - 1 }; };
+function setPre(p) { S.pre = p; if (p == "all") S.from = START; else if (p == "m") S.from = fromIso(TISO.slice(0, 8) + "01"); else S.from = TODAY - (+p) + 1; S.to = TODAY; render(); }
 $("pre").querySelectorAll("span").forEach(e => e.onclick = () => setPre(e.dataset.p));
-$("dF").onchange = e => { if (!e.target.value) return; F.from = fromIso(e.target.value); if (F.from > F.to) F.to = F.from; F.pre = ""; renderAll(); };
-$("dT").onchange = e => { if (!e.target.value) return; F.to = Math.min(TODAY, fromIso(e.target.value)); if (F.to < F.from) F.from = F.to; F.pre = ""; renderAll(); };
+$("dF").onchange = e => { if (!e.target.value) return; S.from = fromIso(e.target.value); if (S.from > S.to) S.to = S.from; S.pre = ""; render(); };
+$("dT").onchange = e => { if (!e.target.value) return; S.to = Math.min(TODAY, fromIso(e.target.value)); if (S.to < S.from) S.from = S.to; S.pre = ""; render(); };
 KENH.forEach(x => $("fK").innerHTML += `<option>${esc(x)}</option>`);
-[["fK", "k"], ["fC", "c"], ["fN", "n"]].forEach(([id, k]) => $(id).onchange = e => { F[k] = e.target.value; renderAll(); });
-$("clr").onclick = () => { Object.assign(F, { k: "", c: "", n: "", st: null, ctv: null }); setPre(CFG.mocMacDinh); };
-function rSlicer() {
-  $("pre").querySelectorAll("span").forEach(e => e.classList.toggle("on", e.dataset.p == F.pre));
-  $("dF").value = iso(F.from); $("dT").value = iso(F.to);
-  const p = prevF(), L = F.to - F.from + 1;
-  $("cmp").innerHTML = `<b>${L} ngày</b> · so với kỳ trước ${fmt(p.from)}–${fmt(p.to)}`;
-  $("fK").value = F.k; $("fC").value = F.c; $("fN").value = F.n;
-  const P = []; if (F.st !== null) P.push(["st", "Trạng thái: " + ST[F.st]]); if (F.ctv) P.push(["ctv", "CTV: " + F.ctv.ten]);
-  $("pills").innerHTML = P.map(x => `<span class="pill" data-k="${x[0]}">${esc(x[1])} ✕</span>`).join("");
-  $("pills").querySelectorAll(".pill").forEach(e => e.onclick = () => { F[e.dataset.k] = null; renderAll(); });
-}
-// Mốc trên trục thời gian: ≤31 ngày theo ngày, ≤120 ngày theo tuần, dài hơn theo tháng
-function buckets() {
-  const L = F.to - F.from + 1, B = [];
-  if (L <= 31) { for (let d = F.from; d <= F.to; d++) B.push({ a: d, b: d, l: fmt(d) }); return { B, g: "theo ngày" }; }
-  if (L <= 120) { for (let d = F.from; d <= F.to; d += 7) B.push({ a: d, b: Math.min(d + 6, F.to), l: fmt(d) }); return { B, g: "theo tuần" }; }
-  let d = F.from;
-  while (d <= F.to) { const x = dd(d), e = Math.min(F.to, Math.round((Date.UTC(x.getUTCFullYear(), x.getUTCMonth() + 1, 1) - D0) / DAY) - 1); B.push({ a: d, b: e, l: "T" + (x.getUTCMonth() + 1) + "/" + String(x.getUTCFullYear()).slice(2) }); d = e + 1; }
-  return { B, g: "theo tháng" };
-}
-const inB = (a, x) => a.filter(b => b.day >= x.a && b.day <= x.b);
-const zoomTo = x => { F.from = x.a; F.to = x.b; F.pre = ""; renderAll(); };
-// Ngân sách: lấy ngân sách tháng chia đều theo ngày
-function planOf(a, b) {
-  let t = 0;
-  for (let d = a; d <= b; d++) {
-    const x = dd(d), key = x.toISOString().slice(0, 7), mo = PLAN[key]; if (!mo) continue;
-    const days = new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth() + 1, 0)).getUTCDate();
-    KENH.forEach(k => { if (!F.k || F.k == k) t += (+mo[k] || 0) / days; });
-  }
-  return t;
-}
-function kpi(id, items) {
-  $(id).innerHTML = items.map(([bg, fg, ic, l, v, cur, prev, inv, fp]) => {
-    let d = "&nbsp;"; const P = x => fp ? fp(x) : x;
-    if (prev != null && isFinite(prev) && prev !== 0 && cur != null && isFinite(cur)) {
-      const x = (cur - prev) / Math.abs(prev) * 100, good = (x >= 0) !== !!inv;
-      d = Math.abs(x) < .5 ? `<span>● 0%</span> · kỳ trước ${P(prev)}` : `<span class="${good ? "up" : "dn"}">${x >= 0 ? "▲" : "▼"} ${Math.abs(x).toFixed(0)}%</span> · kỳ trước ${P(prev)}`;
-    } else if (prev === 0) d = "kỳ trước: 0";
-    return `<div class="kpi"><i style="background:${bg};color:${fg}">${ic}</i><div style="min-width:0"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div></div>`;
-  }).join("");
-}
-const emptyRow = (n, t) => `<tr><td colspan="${n}" class="empty">${t || "Chưa có dữ liệu trong bộ lọc này"}</td></tr>`;
+$("fK").onchange = e => { S.k = e.target.value; render(); }; $("fN").onchange = e => { S.n = e.target.value; render(); };
+function planOf(a, b) { let t = 0; for (let d = a; d <= b; d++) { const x = dd(d), mo = PLAN[x.toISOString().slice(0, 7)]; if (!mo) continue; const days = new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth() + 1, 0)).getUTCDate(); KENH.forEach(k => { if (!S.k || S.k == k) t += (+mo[k] || 0) / days; }); } return t; }
+function buckets() { const L = S.to - S.from + 1, step = L <= 31 ? 1 : L <= 120 ? 7 : 30, B = []; for (let d = S.from; d <= S.to; d += step) B.push({ a: d, b: Math.min(d + step - 1, S.to) }); return { B, g: step == 1 ? "Theo ngày" : step == 7 ? "Theo tuần" : "Theo 30 ngày" }; }
 
-/* ===== 4. Biểu đồ ===== */
-Chart.defaults.font.family = "Poppins,system-ui,sans-serif"; Chart.defaults.font.size = 10.5; Chart.defaults.color = "#737791"; Chart.defaults.maintainAspectRatio = false;
-Chart.defaults.plugins.legend.labels.usePointStyle = true; Chart.defaults.plugins.legend.labels.boxWidth = 7; Chart.defaults.plugins.legend.position = "bottom"; Chart.defaults.animation.duration = 400;
-const dim = (c, on) => on ? c : c + "38", gX = { grid: { display: false }, border: { display: false } }, gY = { grid: { color: "#F1F3F9" }, border: { display: false }, beginAtZero: true }, tipM = c => c.dataset.label + ": " + m(c.raw);
-const gM = { ...gY, suggestedMax: 5e6, ticks: { callback: m } };
-const mk = (id, cfg) => { const ch = new Chart($(id), cfg); $(id).style.cursor = "pointer"; return ch; };
-const tX = { ...gX, ticks: { maxRotation: 0, autoSkipPadding: 8 } };
-let BK = [], topList = [];
-const bTitle = c => { const x = BK[c[0].dataIndex]; return x ? (x.a == x.b ? fmtY(x.a) : fmt(x.a) + " – " + fmtY(x.b)) : ""; };
-const cTrend = mk("cTrend", { data: { labels: [], datasets: [
-  { type: "bar", label: "Chi phí", data: [], backgroundColor: "#A5B4FC", borderRadius: 4, yAxisID: "y", order: 2 },
-  { type: "line", label: "GMV", data: [], borderColor: "#5D5FEF", backgroundColor: "#5D5FEF22", fill: true, tension: .35, pointRadius: 2, yAxisID: "y", order: 1 },
-  { type: "line", label: "ROI", data: [], borderColor: "#3CD856", backgroundColor: "#3CD856", borderDash: [4, 3], tension: .35, pointRadius: 0, yAxisID: "y1", order: 0 }] },
-  options: { interaction: { mode: "index", intersect: false }, scales: { x: tX, y: gM, y1: { position: "right", beginAtZero: true, grid: { display: false }, border: { display: false }, ticks: { callback: v => (+v).toFixed(1) } } },
-    plugins: { tooltip: { callbacks: { title: bTitle, label: c => c.dataset.label == "ROI" ? "ROI: " + (c.raw ?? 0).toFixed(2) : tipM(c) } } }, onClick: (e, el) => el.length && zoomTo(BK[el[0].index]) } });
-const cKenh = mk("cKenh", { type: "bar", data: { labels: KENH, datasets: [{ label: "Chi phí", data: [], borderRadius: 4 }, { label: "GMV", data: [], borderRadius: 4 }] }, options: { scales: { x: gX, y: gM }, plugins: { tooltip: { callbacks: { label: tipM } } }, onClick: (e, el) => el.length && tog("k", KENH[el[0].index]) } });
-const cSt = mk("cSt", { type: "doughnut", data: { labels: ST, datasets: [{ data: [], borderWidth: 2, borderColor: "#fff" }] }, options: { cutout: "60%", plugins: { legend: { position: "right", labels: { font: { size: 10 } } } }, onClick: (e, el) => el.length && tog("st", el[0].index) } });
-const cCamp = mk("cCamp", { type: "bar", data: { labels: [], datasets: [{ label: "Chi phí", data: [], borderRadius: 4 }, { label: "GMV", data: [], borderRadius: 4 }] }, options: { indexAxis: "y", scales: { y: gX, x: gM }, plugins: { tooltip: { callbacks: { label: tipM } } }, onClick: (e, el) => el.length && tog("c", CAMP[el[0].index]) } });
-const cTop = mk("cTop", { type: "bar", data: { labels: [], datasets: [{ data: [], borderRadius: 5 }] }, options: { indexAxis: "y", plugins: { legend: { display: false } }, scales: { x: gY, y: { ...gX, ticks: { font: { size: 10 } } } }, onClick: (e, el) => el.length && tog("ctv", topList[el[0].index].c) } });
-const cSc = mk("cSc", { type: "scatter", data: { datasets: KENH.map((k, i) => ({ label: k, data: [], backgroundColor: KC[i] + "cc", pointRadius: 5, pointHoverRadius: 8 })) },
-  options: { scales: { x: gM, y: gM }, plugins: { tooltip: { callbacks: { label: c => c.raw.n + ": CP " + m(c.raw.x) + " · GMV " + m(c.raw.y) } } }, onClick: (e, el) => el.length && tog("ctv", cSc.data.datasets[el[0].datasetIndex].data[el[0].index].c) } });
-const cPlan = mk("cPlan", { type: "bar", data: { labels: [], datasets: [{ label: "Kế hoạch", data: [], backgroundColor: "#4AB58E", borderRadius: 3 }, { label: "Thực chi", data: [], backgroundColor: "#FFCF00", borderRadius: 3 }] }, options: { scales: { x: tX, y: gM }, plugins: { tooltip: { callbacks: { title: bTitle, label: tipM } } }, onClick: (e, el) => el.length && zoomTo(BK[el[0].index]) } });
-const cOn = mk("cOn", { type: "line", data: { labels: [], datasets: [{ label: "Đúng hạn", data: [], fill: true, tension: .35, borderColor: "#0095FF", backgroundColor: "#0095FF22", pointRadius: 2, spanGaps: true }, { label: "Mục tiêu", data: [], borderDash: [5, 5], borderColor: "#3CD856", pointRadius: 0 }] },
-  options: { plugins: { legend: { display: false }, tooltip: { callbacks: { title: bTitle, label: c => c.dataset.label + ": " + (c.raw ?? 0).toFixed(0) + "%" } } }, scales: { x: tX, y: { ...gY, beginAtZero: false, suggestedMin: 60, max: 100, ticks: { callback: v => v + "%" } } }, onClick: (e, el) => el.length && zoomTo(BK[el[0].index]) } });
-const cPay = mk("cPay", { type: "doughnut", data: { labels: [ST[2], ST[3], ST[4]], datasets: [{ data: [], backgroundColor: ["#FFCF00", "#FF947A", "#3CD856"], borderColor: "#fff", borderWidth: 2 }] }, options: { cutout: "60%", plugins: { tooltip: { callbacks: { label: c => c.label + ": " + m(c.raw) } } }, onClick: (e, el) => el.length && tog("st", el[0].index + 2) } });
+/* ===== 4. Thành phần dùng chung ===== */
+function kpis(id, L) { $(id).innerHTML = L.map(k => `<div class="kpi"><div class="l">${k.l}</div><div class="v">${k.v}</div><div class="d">${k.c ? `<span class="chg ${k.good ? "g" : "b"}">${k.c}</span>` : ""}<span>${k.s || ""}</span></div>${k.meter != null ? `<div class="meter"><i style="width:${Math.max(0, Math.min(100, k.meter))}%;background:${k.mc || "#0F172A"}"></i></div>` : ""}</div>`).join(""); }
+const chg = (c, p, inv) => p ? { c: pct((c - p) / Math.abs(p) * 100), good: ((c - p) >= 0) !== !!inv } : {};
+const ins = (id, L) => $(id).innerHTML = `<div class="t">Nhận định tự động</div>` + (L.length ? L.map(x => `<p class="${x[0]}">${x[1]}</p>`).join("") : `<p>Chưa có dữ liệu để nhận định.</p>`);
+const roiOf = a => { const c = sum(act(a), "cost"); return c ? sum(act(a), "gmv") / c : 0; };
+const onOf = a => { const p = a.filter(b => b.posted); return p.length ? 100 - p.filter(b => b.tre).length / p.length * 100 : 0; };
+const emptyRow = (n, t) => `<tr><td colspan="${n}" class="empty">${t || "Chưa có dữ liệu trong khoảng thời gian này"}</td></tr>`;
+const F = "Inter,system-ui,sans-serif", C = {}, RO = new ResizeObserver(es => es.forEach(e => C[e.target.id] && C[e.target.id].resize()));
+const ec = id => C[id] || (RO.observe($(id)), C[id] = echarts.init($(id)));
+const TIP = { backgroundColor: "#0F172A", borderWidth: 0, padding: [8, 12], textStyle: { color: "#fff", fontFamily: F, fontSize: 12 }, extraCssText: "border-radius:8px" };
+const AX = { axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "#94A3B8", fontFamily: F, fontSize: 11 }, splitLine: { lineStyle: { color: "#F1F3F5" } } };
+const ANI = { animationDuration: 700, animationEasing: "cubicOut", animationDurationUpdate: 500 };
+const LEG = { top: 0, left: 0, icon: "roundRect", itemWidth: 10, itemHeight: 4, textStyle: { fontFamily: F, fontSize: 11.5, color: "#64748B" } };
+const emptyChart = id => ec(id).setOption({ graphic: [{ type: "text", left: "center", top: "middle", style: { text: "Chưa có dữ liệu", fill: "#94A3B8", font: "500 13px Inter,system-ui" } }], series: [] }, true);
+const trM = v => (v / 1e6).toLocaleString("vi-VN") + "tr";
 
-/* ===== 5. Tab Tổng quan ===== */
-function perf(A) {
-  const M = new Map(); A.forEach(b => { if (!M.has(b.c)) M.set(b.c, []); M.get(b.c).push(b); });
-  return [...M].map(([c, b]) => { const co = sum(b, "cost"), v = sum(b, "view"), e = sum(b, "eng"), d = sum(b, "don"), g = sum(b, "gmv");
-    return { c, n: b.length, co, v, e, cpv: v ? co / v : 0, cpe: e ? co / e : 0, d, cpo: d ? co / d : 0, g, roi: co ? g / co : 0, tre: b.filter(x => x.tre).length }; });
+/* ===== 5. Tổng quan ===== */
+function todos() { // danh sách "Việc cần xử lý", dùng cho Tổng quan và tab Công việc
+  const A = sel(), G = groupBy(act(A), b => b.c);
+  const loss = [...G].filter(([c, x]) => sum(x, "gmv") < sum(x, "cost")).map(([c, x]) => ({ n: c.ten, v: sum(x, "cost") - sum(x, "gmv") })).sort((a, b) => b.v - a.v);
+  const late = A.filter(b => b.late0), pend = bk.filter(b => (b.st == 2 || b.st == 3) && TODAY - b.day > WAIT), miss = [...G.keys()].filter(c => !c.missing && (!c.stk || !c.cccd)), R = recon().L;
+  return [
+    { sev: "#B91C1C", t: "Booking quá deadline chưa đăng", n: late.length, imp: m(sum(late, "cost")) + " đã chốt", act: "Nhắc CTV đăng bài, quá 3 ngày cân nhắc huỷ", nhom: "Booking", items: late.map(b => `${b.id} · ${b.c.ten} · book ${fmt(b.day)}`) },
+    { sev: "#B91C1C", t: "CTV đang lỗ (ROI dưới 1)", n: loss.length, imp: "lỗ " + m(sum(loss, "v")), act: "Đàm phán lại giá hoặc ngừng booking kỳ sau", nhom: "Booking", items: loss.map(x => `${x.n} · lỗ ${m(x.v)}`) },
+    { sev: "#B45309", t: `Chờ thanh toán quá ${WAIT} ngày`, n: pend.length, imp: m(sum(pend, "cost")), act: "Gửi danh sách cho kế toán", nhom: "Kế toán", items: pend.map(b => `${b.id} · ${b.c.ten} · ${TODAY - b.day} ngày`) },
+    { sev: "#B45309", t: "Khoản lệch với kế toán", n: R.length, imp: R.length ? "xem tab Đối soát" : "", act: "Gửi kế toán xác nhận", nhom: "Kế toán", items: R.map(x => `${x.id} · ${x.type}`) },
+    { sev: "#64748B", t: "CTV có booking nhưng thiếu STK/CCCD", n: miss.length, imp: "—", act: "Bổ sung hồ sơ trước kỳ thanh toán", nhom: "Nhân sự", items: miss.map(c => `${c.id} · ${c.ten}`) }
+  ].filter(x => x.n);
 }
-const warn = c => { const w = []; if (c.missing) return ["Không có hồ sơ"]; if (!c.stk) w.push("Thiếu STK"); if (!c.cccd) w.push("Thiếu CCCD"); if (c.dup) w.push("Trùng SĐT"); return w; };
 function rTQ() {
-  const A = act(flt()), P = act(flt([], prevF())), co = sum(A, "cost"), g = sum(A, "gmv"), pco = sum(P, "cost"), pg = sum(P, "gmv"), cho = flt().filter(b => b.st == 2 || b.st == 3);
-  const nC = x => new Set(x.map(b => b.c)).size;
-  kpi("kTQ", [["#FFE2E5", "#FA5A7D", "₫", "Chi phí booking", m(co), co, pco, 1, m], ["#DCFCE7", "#3CD856", "$", "GMV", m(g), g, pg, 0, m],
-    ["#F3E8FF", "#BF83FF", "%", "ROI", co ? (g / co).toFixed(2) : "—", co ? g / co : null, pco ? pg / pco : null, 0, x => x.toFixed(2)],
-    ["#FFF4DE", "#FF947A", "#", "Booking", A.length, A.length, P.length], ["#E0F2FE", "#0095FF", "☺", "CTV có booking", nC(A), nC(A), nC(P)], ["#F1F5F9", "#64748B", "⧗", "Chờ thanh toán", m(sum(cho, "cost")), null, null]]);
-  const { B, g: gr } = buckets(); BK = B; $("gran").textContent = gr;
-  cTrend.data.labels = B.map(x => x.l); cTrend.data.datasets[0].data = B.map(x => sum(inB(A, x), "cost")); cTrend.data.datasets[1].data = B.map(x => sum(inB(A, x), "gmv"));
-  cTrend.data.datasets[2].data = B.map(x => { const a = inB(A, x), c = sum(a, "cost"); return c ? sum(a, "gmv") / c : null; }); cTrend.update();
-  const byK = KENH.map(k => act(flt(["k"], { k }))); cKenh.data.datasets[0].data = byK.map(a => sum(a, "cost")); cKenh.data.datasets[1].data = byK.map(a => sum(a, "gmv"));
-  cKenh.data.datasets[0].backgroundColor = KENH.map(k => dim("#0095FF", !F.k || F.k == k)); cKenh.data.datasets[1].backgroundColor = KENH.map(k => dim("#00E096", !F.k || F.k == k)); cKenh.update();
-  const sA = flt(["st"]); cSt.data.datasets[0].data = ST.map((x, i) => sA.filter(b => b.st == i).length); cSt.data.datasets[0].backgroundColor = STCOL.map((c, i) => dim(c, F.st === null || F.st == i)); cSt.update();
-  const byC = CAMP.map(c => act(flt(["c"], { c }))); cCamp.data.labels = CAMP; cCamp.data.datasets[0].data = byC.map(a => sum(a, "cost")); cCamp.data.datasets[1].data = byC.map(a => sum(a, "gmv"));
-  cCamp.data.datasets[0].backgroundColor = CAMP.map(c => dim("#FA5A7D", !F.c || F.c == c)); cCamp.data.datasets[1].backgroundColor = CAMP.map(c => dim("#5D5FEF", !F.c || F.c == c)); cCamp.update();
-  const AC = act(flt(["ctv"])), pc = perf(AC).sort((a, b) => b.g - a.g).slice(0, 10), tg = sum(AC, "gmv") || 1, mx = pc[0] && pc[0].g ? pc[0].g : 1;
-  $("tTop").innerHTML = "<thead><tr><th>#</th><th>CTV</th><th>Tỉ trọng</th><th class=num>GMV</th><th class=num>ROI</th></tr></thead><tbody>" + (pc.length ? pc.map((p, i) =>
-    `<tr data-i="${ctv.indexOf(p.c)}" class="${F.ctv === p.c ? "sel" : ""}"><td>${i + 1}</td><td>${esc(p.c.ten)}</td><td><div class="prog"><i style="width:${p.g / mx * 100}%;background:${KC[KENH.indexOf(p.c.kenh)] || "#94a3b8"}"></i></div></td><td class=num>${m(p.g)} <span style="color:#96A5B8">(${(p.g / tg * 100).toFixed(0)}%)</span></td><td class=num><b>${p.roi.toFixed(2)}</b></td></tr>`).join("") : emptyRow(5)) + "</tbody>";
-  $("tTop").querySelectorAll("tbody tr[data-i]").forEach(t => t.onclick = () => ctv[t.dataset.i] && tog("ctv", ctv[t.dataset.i]));
-  const F0 = flt(), al = [];
-  const tre = F0.filter(b => b.tre && b.st < 2).length; if (tre) al.push(["#FFE2E5", "🔴", tre + " booking quá deadline mà chưa đăng"]);
-  const low = perf(A).filter(p => p.roi < 1).length; if (low) al.push(["#FFF4DE", "🟠", low + " CTV có ROI dưới 1"]);
-  const miss = ctv.filter(c => !c.stk || !c.cccd).length; if (miss) al.push(["#FFF4DE", "🟠", miss + " CTV thiếu STK hoặc CCCD"]);
-  const dup = ctv.filter(c => c.dup); if (dup.length) al.push(["#FFF4DE", "🟠", "CTV trùng SĐT: " + dup.slice(0, 4).map(c => c.id).join(", ") + (dup.length > 4 ? "…" : "")]);
-  const nos = bk.filter(b => b.c.missing).length; if (nos) al.push(["#FFE2E5", "🔴", nos + " booking có mã CTV không tồn tại"]);
-  const ds = recon(); const bad = ds.L.length; if (bad) al.push(["#F3E8FF", "🟣", bad + " dòng lệch khi đối soát kế toán"]);
-  $("alerts").innerHTML = al.length ? al.map(a => `<div class="al" style="background:${a[0]}">${a[1]} ${esc(a[2])}</div>`).join("") : `<div class="empty">Không có việc cần xử lý</div>`;
+  const A = sel(), P = sel(prev()), co = sum(act(A), "cost"), pco = sum(act(P), "cost"), g = sum(act(A), "gmv"), pg = sum(act(P), "gmv"), roi = roiOf(A), proi = roiOf(P), on = onOf(A), pon = onOf(P), plan = planOf(S.from, S.to);
+  kpis("kTQ", [{ l: "Chi phí booking", v: m(co), ...chg(co, pco, 1), s: plan ? `${(co / plan * 100).toFixed(0)}% ngân sách kỳ` : "chưa nhập ngân sách", meter: plan ? co / plan * 100 : null, mc: co > plan ? "#B91C1C" : "#0F172A" },
+    { l: "GMV mang về", v: m(g), ...chg(g, pg), s: "so với kỳ trước" },
+    { l: "ROI", v: co ? r2(roi) : "—", ...chg(roi, proi), s: `mục tiêu ${r2(ROI_T)}`, meter: roi / (ROI_T * 1.5) * 100, mc: roi >= ROI_T ? "#047857" : "#B45309" },
+    { l: "Đăng đúng hạn", v: A.some(b => b.posted) ? on.toFixed(1).replace(".", ",") + "%" : "—", ...chg(on, pon), s: `mục tiêu ${ONT}%`, meter: on, mc: on >= ONT ? "#047857" : "#B45309" }]);
+  const { B, g: gr } = buckets(); $("gran").textContent = gr;
+  if (!act(A).length) { emptyChart("cTrend"); emptyChart("cKenh"); ins("iTrend", []); ins("iKenh", []); }
+  else {
+    const inB = x => act(A).filter(b => b.day >= x.a && b.day <= x.b), cs = B.map(x => sum(inB(x), "cost")), gs = B.map(x => sum(inB(x), "gmv"));
+    ec("cTrend").setOption({ ...ANI, grid: { left: 48, right: 12, top: 30, bottom: 24 }, legend: LEG,
+      tooltip: { ...TIP, trigger: "axis", axisPointer: { type: "line", lineStyle: { color: "#CBD5E1" } }, formatter: p => { const i = p[0].dataIndex, x = B[i]; return `<b>${x.a == x.b ? fmt(x.a) : fmt(x.a) + "–" + fmt(x.b)}</b><br>Chi phí: ${m(cs[i])}<br>GMV: ${m(gs[i])}<br>ROI: ${cs[i] ? r2(gs[i] / cs[i]) : "—"}`; } },
+      xAxis: { type: "category", data: B.map(x => fmt(x.a)), ...AX, splitLine: { show: false } }, yAxis: { type: "value", ...AX, axisLabel: { ...AX.axisLabel, formatter: trM } },
+      series: [{ name: "Chi phí", type: "bar", data: cs, barMaxWidth: 14, itemStyle: { color: "#CBD5E1", borderRadius: [3, 3, 0, 0] } },
+        { name: "GMV", type: "line", data: gs, smooth: .3, symbol: "circle", symbolSize: 5, showSymbol: false, lineStyle: { width: 2.5, color: "#1D4ED8" }, itemStyle: { color: "#1D4ED8" },
+          areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: "#1D4ED81f" }, { offset: 1, color: "#1D4ED800" }]) } }] }, true);
+    const dG = KENH.map(k => ({ k, d: sum(act(A.filter(b => b.c.kenh == k)), "gmv") - sum(act(P.filter(b => b.c.kenh == k)), "gmv") })).sort((a, b) => (g >= pg ? b.d - a.d : a.d - b.d));
+    const gc = pg ? (g - pg) / pg * 100 : null, cc = pco ? (co - pco) / pco * 100 : null, pk = gs.indexOf(Math.max(...gs)), L = [];
+    if (gc == null) L.push(["", `GMV đạt <b>${m(g)}</b>; kỳ trước chưa có dữ liệu để so sánh.`]);
+    else L.push([gc >= 0 ? "g" : "b", `GMV đạt <b>${m(g)}</b>, ${gc >= 0 ? "tăng" : "giảm"} <b>${Math.abs(gc).toFixed(0)}%</b> so với kỳ trước; ${gc >= 0 ? "tăng" : "giảm"} nhiều nhất ở <b>${dG[0].k}</b> (${dG[0].d >= 0 ? "+" : "−"}${m(Math.abs(dG[0].d))}).`]);
+    if (cc != null && gc != null) L.push(cc > gc + 5 ? ["b", `Chi phí tăng <b>${cc.toFixed(0)}%</b>, nhanh hơn GMV, nên ROI giảm từ <b>${r2(proi)}</b> xuống <b>${r2(roi)}</b>.`] : ["g", `Chi phí ${cc >= 0 ? "tăng" : "giảm"} <b>${Math.abs(cc).toFixed(0)}%</b>, không nhanh hơn GMV; ROI ở mức <b>${r2(roi)}</b>.`]);
+    if (plan && co > plan) L.push(["b", `Chi phí đã vượt ngân sách kỳ <b>${m(co - plan)}</b>.`]);
+    if (B[pk]) L.push(["", `Mốc GMV cao nhất: <b>${fmt(B[pk].a)}</b> với ${m(gs[pk])}.`]);
+    ins("iTrend", L);
+    const KR = KENH.map(k => { const a = A.filter(b => b.c.kenh == k); return { k, roi: roiOf(a), co: sum(act(a), "cost") }; }).filter(x => x.co).sort((a, b) => b.roi - a.roi);
+    ec("cKenh").setOption({ ...ANI, grid: { left: 74, right: 40, top: 6, bottom: 18 }, tooltip: { ...TIP, trigger: "item", formatter: p => `<b>${p.name}</b><br>ROI: ${r2(p.value)}<br>Chi phí: ${m(KR[p.dataIndex].co)}` },
+      xAxis: { type: "value", ...AX, axisLabel: { ...AX.axisLabel, formatter: v => r2(v) } }, yAxis: { type: "category", inverse: true, data: KR.map(x => x.k), ...AX, axisLabel: { ...AX.axisLabel, color: "#334155", fontSize: 12 } },
+      series: [{ type: "bar", data: KR.map(x => ({ value: +x.roi.toFixed(2), itemStyle: { color: x.roi >= ROI_T ? "#1D4ED8" : "#F59E0B" } })), barWidth: 14, itemStyle: { borderRadius: [0, 4, 4, 0] },
+        label: { show: true, position: "right", fontFamily: F, fontSize: 11.5, color: "#334155", fontWeight: 600, formatter: p => r2(p.value) },
+        markLine: { symbol: "none", silent: true, lineStyle: { color: "#0F172A", type: "dashed", width: 1 }, label: { show: false }, data: [{ xAxis: ROI_T }] } }] }, true);
+    const tc = co || 1, best = KR[0], worst = KR[KR.length - 1], under = KR.filter(x => x.roi < ROI_T);
+    const lowC = [...groupBy(act(A).filter(b => b.c.kenh == worst.k), b => b.c).values()].filter(x => sum(x, "gmv") < sum(x, "cost")).length;
+    ins("iKenh", [["g", `<b>${best.k}</b> hiệu quả nhất (ROI ${r2(best.roi)}), chiếm ${(best.co / tc * 100).toFixed(0)}% chi phí.`],
+      under.length ? ["w", `${under.map(x => "<b>" + x.k + "</b>").join(", ")} dưới mục tiêu ROI ${r2(ROI_T)}.`] : ["g", `Tất cả kênh đạt mục tiêu ROI ${r2(ROI_T)}.`],
+      lowC ? ["b", `<b>${worst.k}</b> có <b>${lowC} CTV</b> đang lỗ (ROI dưới 1), nên xem lại giá hoặc giảm booking.`] : ["", `${worst.k} thấp nhất nhưng không có CTV lỗ.`]]);
+  }
+  const T = todos();
+  $("tTodo").innerHTML = `<thead><tr><th>Vấn đề</th><th class=num>Số lượng</th><th class=num>Ảnh hưởng</th><th>Đề xuất xử lý</th></tr></thead><tbody>` + (T.length ?
+    T.map((x, i) => `<tr class="x" data-i="${i}"><td><span class="caret">›</span><span class="sev" style="background:${x.sev}"></span>${x.t}</td><td class=num><b>${x.n}</b></td><td class=num>${x.imp}</td><td style="color:#475569">${x.act}</td></tr>` +
+      x.items.slice(0, 8).map(s => `<tr class="sub" data-p="${i}" style="display:none"><td colspan="4">${esc(s)}</td></tr>`).join("") + (x.items.length > 8 ? `<tr class="sub" data-p="${i}" style="display:none"><td colspan="4">… và ${x.items.length - 8} mục khác</td></tr>` : "")).join("")
+    : emptyRow(4, bk.length ? "Không có việc cần xử lý" : "Chưa có dữ liệu")) + "</tbody>";
+  $("tTodo").querySelectorAll("tr.x").forEach(t => t.onclick = () => { t.classList.toggle("open"); $("tTodo").querySelectorAll(`tr[data-p="${t.dataset.i}"]`).forEach(r => r.style.display = t.classList.contains("open") ? "" : "none"); });
 }
 
-/* ===== 6. Tab CTV & Booking ===== */
-["q", "fT", "fW"].forEach(i => $(i).oninput = rCB);
-function rCB() {
-  const B = flt(["ctv", "st"]), P = flt(["ctv", "st"], prevF()), q = $("q").value.toLowerCase(), ft = $("fT").value, fw = $("fW").checked, cnt = new Map();
-  B.forEach(b => cnt.set(b.c, (cnt.get(b.c) || 0) + 1));
-  const nC = x => new Set(x.map(b => b.c)).size, posted = x => x.filter(b => b.st >= 1 && b.st < 5).length, late = x => x.filter(b => b.tre && b.st < 2).length, cc = x => x.filter(b => b.st == 5).length;
-  kpi("kCB", [["#E0F2FE", "#0095FF", "☺", "CTV active", ctv.filter(c => c.tt == "Active").length, null, null], ["#DCFCE7", "#3CD856", "+", "CTV có booking", nC(B), nC(B), nC(P)],
-    ["#FFF4DE", "#FF947A", "#", "Booking mới", B.length, B.length, P.length], ["#F3E8FF", "#BF83FF", "✓", "Đã đăng", posted(B), posted(B), posted(P)],
-    ["#FFE2E5", "#FA5A7D", "!", "Trễ hạn chưa đăng", late(B), late(B), late(P), 1], ["#F1F5F9", "#64748B", "×", "Huỷ", cc(B), cc(B), cc(P), 1]]);
-  const L = ctv.filter(c => (!F.k || c.kenh == F.k) && (!F.n || c.ns == F.n) && (!q || (c.id + c.ten + c.sdt).toLowerCase().includes(q)) && (!ft || c.tt == ft) && (!fw || warn(c).length))
-    .sort((a, b) => (cnt.get(b) || 0) - (cnt.get(a) || 0));
-  $("nCtv").textContent = L.length;
-  $("tCtv").innerHTML = "<thead><tr><th>Mã</th><th>Họ tên</th><th>Kênh</th><th class=num>Booking</th><th>Trạng thái</th><th>Cảnh báo</th></tr></thead><tbody>" + (L.length ? L.slice(0, 500).map(c =>
-    `<tr data-i="${ctv.indexOf(c)}" class="${F.ctv === c ? "sel" : ""}"><td>${esc(c.id)}</td><td>${esc(c.ten)}</td><td>${esc(c.kenh)}</td><td class=num>${cnt.get(c) || 0}</td><td><span class="tag ${c.tt == "Active" ? "t-ok" : c.tt == "Tạm dừng" ? "t-warn" : "t-bad"}">${esc(c.tt)}</span></td><td>${warn(c).map(x => `<span class="tag t-bad">${x}</span>`).join(" ")}</td></tr>`).join("") : emptyRow(6, ctv.length ? "Không có CTV khớp bộ lọc" : "Chưa có CTV nào")) + "</tbody>";
-  $("tCtv").querySelectorAll("tbody tr[data-i]").forEach(t => t.onclick = () => tog("ctv", ctv[t.dataset.i]));
-  const BS = flt(["st"]);
-  $("chips").innerHTML = `<span class="chip ${F.st === null ? "on" : ""}" data-i="">Tất cả ${BS.length}</span>` + ST.map((x, i) => `<span class="chip ${F.st === i ? "on" : ""}" data-i="${i}">${x} ${BS.filter(b => b.st == i).length}</span>`).join("");
-  $("chips").querySelectorAll(".chip").forEach(c => c.onclick = () => { if (c.dataset.i === "") { F.st = null; renderAll(); } else tog("st", +c.dataset.i); });
-  const BB = flt(), c = F.ctv;
-  $("bkT").innerHTML = (c ? "Booking của " + esc(c.ten) : "Booking") + ` <span class="tag t-mute">${BB.length}</span>`;
-  $("prof").innerHTML = c ? `<div class="prof"><span>Mã <b>${esc(c.id)}</b></span><span>SĐT <b>${esc(c.sdt)}</b></span><span>Kênh <b>${esc(c.kenh)}</b></span><span>Follower <b>${vnd(c.fl)}</b></span><span>Ngành <b>${esc(c.nganh)}</b></span><span>Rate <b>${vnd(c.rate)}</b></span><span>Phụ trách <b>${esc(c.ns)}</b></span></div>` : "";
-  $("tBk").innerHTML = "<thead><tr><th>Mã</th>" + (c ? "" : "<th>CTV</th>") + "<th>Chiến dịch</th><th>Ngày</th><th class=num>Chi phí</th><th class=num>View</th><th class=num>GMV</th><th>Trạng thái</th></tr></thead><tbody>" +
-    (BB.length ? BB.slice(0, 300).map(b => `<tr><td>${esc(b.id)}</td>${c ? "" : `<td>${esc(b.c.ten)}</td>`}<td>${esc(b.camp)}</td><td>${fmt(b.day)}</td><td class=num>${vnd(b.cost)}</td><td class=num>${vnd(b.view)}</td><td class=num>${vnd(b.gmv)}</td><td><span class="tag ${STC[b.st]}">${ST[b.st]}</span>${b.tre && b.st < 2 ? ' <span class="tag t-bad">Trễ</span>' : ""}</td></tr>`).join("") : emptyRow(8)) + "</tbody>";
-}
-
-/* ===== 7. Tab Hiệu suất ===== */
-const agg = A => { const co = sum(A, "cost"), v = sum(A, "view"), e = sum(A, "eng"), d = sum(A, "don"), g = sum(A, "gmv"), p = A.filter(b => b.st >= 1);
-  return { co, cpv: v ? co / v : null, cpe: e ? co / e : null, cpo: d ? co / d : null, roi: co ? g / co : null, on: p.length ? 100 - p.filter(b => b.tre).length / p.length * 100 : null }; };
-let sk = "roi", sd = -1; $("hMet").onchange = rHS;
+/* ===== 6. Hiệu suất CTV ===== */
+let grp = "";
+const GR = { "Chủ lực": ["t-n", "#1D4ED8", "Duy trì"], "Tiềm năng": ["t-g", "#047857", "Tăng booking"], "Cần xem lại": ["t-b", "#B91C1C", "Đàm phán / giảm"], "Theo dõi": ["t-m", "#94A3B8", "Theo dõi thêm"] };
 function rHS() {
-  const A = act(flt()), Pp = act(flt([], prevF())), a = agg(A), p = agg(Pp), pf = prevF(), pl = planOf(F.from, F.to), ppl = planOf(pf.from, pf.to);
-  kpi("kHS", [["#F3E8FF", "#BF83FF", "%", "ROI", a.roi != null ? a.roi.toFixed(2) : "—", a.roi, p.roi, 0, x => x.toFixed(2)],
-    ["#E0F2FE", "#0095FF", "👁", "CPV (chi phí/view)", a.cpv ? vnd(a.cpv) + "đ" : "—", a.cpv, p.cpv, 1, vnd], ["#FFF4DE", "#FF947A", "♥", "CPE (chi phí/tương tác)", a.cpe ? vnd(a.cpe) + "đ" : "—", a.cpe, p.cpe, 1, vnd],
-    ["#FFE2E5", "#FA5A7D", "🛒", "CPO (chi phí/đơn)", a.cpo ? vnd(a.cpo) + "đ" : "—", a.cpo, p.cpo, 1, vnd], ["#DCFCE7", "#3CD856", "⏱", "Đăng đúng hạn", a.on != null ? a.on.toFixed(1) + "%" : "—", a.on, p.on, 0, x => x.toFixed(1) + "%"],
-    ["#FEF9C3", "#CA8A04", "₫", "Thực chi / kế hoạch", pl ? (a.co / pl * 100).toFixed(0) + "%" : "Chưa có KH", pl ? a.co / pl * 100 : null, ppl ? sum(Pp, "cost") / ppl * 100 : null, 1, x => x.toFixed(0) + "%"]]);
-  const P = perf(A), met = $("hMet").value, fm = v => met == "roi" ? (+v).toFixed(2) : met == "g" ? m(v) : vnd(v);
-  topList = [...P].sort((x, y) => y[met] - x[met]).slice(0, 10);
-  cTop.data.labels = topList.map(x => x.c.ten); cTop.data.datasets[0].data = topList.map(x => x[met]); cTop.data.datasets[0].backgroundColor = topList.map(x => dim(KC[KENH.indexOf(x.c.kenh)] || "#94a3b8", !F.ctv || F.ctv === x.c));
-  cTop.options.scales.x.ticks = { callback: fm }; cTop.options.plugins.tooltip = { callbacks: { label: c => fm(c.raw) } }; cTop.update();
-  const PA = perf(act(flt(["ctv"])));
-  cSc.data.datasets.forEach((d, i) => { d.data = PA.filter(x => x.c.kenh == KENH[i]).map(x => ({ x: x.co, y: x.g, n: x.c.ten, c: x.c })); d.pointBackgroundColor = d.data.map(x => dim(KC[i], !F.ctv || F.ctv === x.c)); d.pointRadius = d.data.map(x => F.ctv === x.c ? 9 : 5); }); cSc.update();
-  const { B } = buckets(); BK = B; const TP = flt().filter(b => b.st >= 1 && b.st < 5);
-  cPlan.data.labels = B.map(x => x.l); cPlan.data.datasets[0].data = B.map(x => planOf(x.a, x.b)); cPlan.data.datasets[1].data = B.map(x => sum(inB(A, x), "cost")); cPlan.update();
-  $("planLeg").innerHTML = pl ? `Kế hoạch <b>${m(pl)}</b> · Thực chi <b>${m(a.co)}</b> (${(a.co / pl * 100).toFixed(0)}%)` : `Chưa nhập ngân sách (sửa trong config.js) · Thực chi <b>${m(a.co)}</b>`;
-  cOn.data.labels = B.map(x => x.l); cOn.data.datasets[0].data = B.map(x => { const q = inB(TP, x); return q.length >= 3 ? 100 - q.filter(b => b.tre).length / q.length * 100 : null; });
-  cOn.data.datasets[1].data = B.map(() => CFG.mucTieuDungHan); cOn.update();
-  const cols = [["c", "CTV", x => esc(x.c.ten)], ["k", "Kênh", x => esc(x.c.kenh)], ["n", "Booking", x => x.n], ["co", "Chi phí", x => vnd(x.co)], ["v", "View", x => vnd(x.v)], ["cpv", "CPV", x => vnd(x.cpv)], ["cpe", "CPE", x => vnd(x.cpe)], ["d", "Đơn", x => x.d], ["cpo", "CPO", x => vnd(x.cpo)], ["g", "GMV", x => vnd(x.g)], ["roi", "ROI", x => x.roi.toFixed(2)], ["tre", "Trễ", x => x.tre]], txt = k => k == "c" || k == "k";
-  const D = [...PA].sort((x, y) => txt(sk) ? 0 : (x[sk] - y[sk]) * sd);
-  $("tHs").innerHTML = "<thead><tr>" + cols.map(c => `<th class="${txt(c[0]) ? "" : "num"}" style="cursor:pointer" data-k="${c[0]}">${c[1]}${sk == c[0] ? (sd < 0 ? " ↓" : " ↑") : ""}</th>`).join("") + "<th>Cờ</th></tr></thead><tbody>" +
-    (D.length ? D.map(x => `<tr data-i="${ctv.indexOf(x.c)}" class="${F.ctv === x.c ? "sel" : ""}">` + cols.map(c => `<td class="${txt(c[0]) ? "" : "num"}">${c[2](x)}</td>`).join("") + `<td>${x.roi < 1 || x.tre >= 2 ? '<span class="tag t-bad">Xem lại</span>' : ""}</td></tr>`).join("") : emptyRow(13)) + "</tbody>";
-  $("tHs").querySelectorAll("th[data-k]").forEach(t => t.onclick = () => { sd = sk == t.dataset.k ? -sd : -1; sk = t.dataset.k; rHS(); });
-  $("tHs").querySelectorAll("tbody tr[data-i]").forEach(t => t.onclick = () => ctv[t.dataset.i] && tog("ctv", ctv[t.dataset.i]));
+  const A = sel(), P = sel(prev()), G = groupBy(act(A), b => b.c);
+  const R = [...G].map(([c, x]) => ({ c, n: x.length, co: sum(x, "cost"), g: sum(x, "gmv"), roi: sum(x, "cost") ? sum(x, "gmv") / sum(x, "cost") : 0, on: onOf(x) }));
+  const cs = R.map(r => r.co).sort((a, b) => a - b), med = cs[Math.floor(cs.length / 2)] || 0;
+  R.forEach(r => r.gr = r.roi >= ROI_T ? (r.co >= med ? "Chủ lực" : "Tiềm năng") : (r.co >= med ? "Cần xem lại" : "Theo dõi"));
+  const tg = sum(R, "g") || 1, sh3 = sum([...R].sort((a, b) => b.g - a.g).slice(0, 3), "g") / tg * 100, nP = new Set(act(P).map(b => b.c)).size;
+  const don = sum(act(A), "don"), cpo = don ? sum(act(A), "cost") / don : 0, pdon = sum(act(P), "don"), pcpo = pdon ? sum(act(P), "cost") / pdon : 0, under = R.filter(r => r.roi < ROI_T).length;
+  kpis("kHS", [{ l: "CTV có booking", v: R.length, ...chg(R.length, nP), s: "so với kỳ trước" }, { l: "Chi phí / đơn (CPO)", v: cpo ? vnd(cpo) + "đ" : "—", ...chg(cpo, pcpo, 1), s: "so với kỳ trước" },
+    { l: "Top 3 CTV chiếm", v: R.length ? sh3.toFixed(0) + "% GMV" : "—", s: sh3 > 35 ? "mức phụ thuộc cao" : "phân bổ ổn", meter: R.length ? sh3 : null, mc: sh3 > 35 ? "#B45309" : "#047857" },
+    { l: "CTV dưới mục tiêu ROI", v: under, s: `trên ${R.length} CTV`, meter: R.length ? under / R.length * 100 : null, mc: "#B45309" }]);
+  if (!R.length) { emptyChart("cMx"); ins("iMx", []); }
+  else {
+    ec("cMx").setOption({ ...ANI, grid: { left: 44, right: 16, top: 24, bottom: 34 }, legend: { ...LEG, icon: "circle", itemWidth: 8, itemHeight: 8 },
+      tooltip: { ...TIP, trigger: "item", formatter: p => `<b>${esc(p.data[2])}</b><br>Chi phí: ${m(p.data[0])}<br>ROI: ${r2(p.data[1])}<br>${p.seriesName} → ${GR[p.seriesName][2]}` },
+      xAxis: { type: "value", name: "Chi phí", nameLocation: "middle", nameGap: 22, nameTextStyle: { color: "#94A3B8", fontFamily: F, fontSize: 11 }, ...AX, axisLabel: { ...AX.axisLabel, formatter: trM } },
+      yAxis: { type: "value", name: "ROI", nameTextStyle: { color: "#94A3B8", fontFamily: F, fontSize: 11 }, ...AX },
+      series: Object.keys(GR).map((k, i) => ({ name: k, type: "scatter", symbolSize: 9, data: R.filter(r => r.gr == k).map(r => [r.co, +r.roi.toFixed(2), r.c.ten]), itemStyle: { color: GR[k][1], opacity: .85 },
+        markLine: i ? undefined : { symbol: "none", silent: true, lineStyle: { color: "#CBD5E1", type: "dashed" }, label: { show: false }, data: [{ yAxis: ROI_T }, { xAxis: med }] } })) }, true);
+    const by = k => R.filter(r => r.gr == k), pot = by("Tiềm năng").sort((a, b) => b.roi - a.roi), bad = by("Cần xem lại").sort((a, b) => a.roi - b.roi);
+    ins("iMx", [pot.length ? ["g", `<b>${pot.length} CTV tiềm năng</b> (ROI cao, chi phí thấp), nên tăng booking: ${pot.slice(0, 3).map(r => "<b>" + esc(r.c.ten) + "</b>").join(", ")}.`] : ["", "Chưa có CTV tiềm năng trong kỳ."],
+      bad.length ? ["b", `<b>${bad.length} CTV cần xem lại</b> (chi phí cao, ROI thấp), tổng chi phí <b>${m(sum(bad, "co"))}</b>; thấp nhất <b>${esc(bad[0].c.ten)}</b> (ROI ${r2(bad[0].roi)}).`] : ["g", "Không có CTV chi phí cao mà ROI thấp."],
+      [sh3 > 35 ? "w" : "", `Top 3 CTV tạo ra <b>${sh3.toFixed(0)}%</b> GMV${sh3 > 35 ? ", phụ thuộc cao, nên mở rộng nhóm CTV chủ lực" : ""}.`]]);
+  }
+  const by = k => R.filter(r => r.gr == k);
+  $("chips").innerHTML = `<span class="chip ${grp == "" ? "on" : ""}" data-g="">Tất cả ${R.length}</span>` + Object.keys(GR).map(k => `<span class="chip ${grp == k ? "on" : ""}" data-g="${k}">${k} ${by(k).length}</span>`).join("");
+  $("chips").querySelectorAll(".chip").forEach(c => c.onclick = () => { grp = c.dataset.g; rHS(); });
+  const D = R.filter(r => !grp || r.gr == grp).sort((a, b) => b.g - a.g); $("nRank").textContent = D.length + " CTV · sắp theo GMV";
+  $("tRank").innerHTML = `<thead><tr><th>#</th><th>CTV</th><th>Kênh</th><th class=num>Booking</th><th class=num>Chi phí</th><th class=num>GMV</th><th class=num>ROI</th><th class=num>Đúng hạn</th><th>Đề xuất</th></tr></thead><tbody>` + (D.length ?
+    D.map((r, i) => `<tr><td style="color:#94A3B8">${i + 1}</td><td style="font-weight:500">${esc(r.c.ten)}</td><td style="color:#64748B">${esc(r.c.kenh)}</td><td class=num>${r.n}</td><td class=num>${m(r.co)}</td><td class=num>${m(r.g)}</td><td class=num style="font-weight:600;color:${r.roi < 1 ? "#B91C1C" : r.roi < ROI_T ? "#B45309" : "#0F172A"}">${r2(r.roi)}</td><td class=num>${r.on.toFixed(0)}%</td><td><span class="tag ${GR[r.gr][0]}">${GR[r.gr][2]}</span></td></tr>`).join("") : emptyRow(9)) + "</tbody>";
 }
 
-/* ===== 8. Tab Đối soát kế toán =====
-   Quy tắc: so khớp booking (đã nghiệm thu trở đi) với dữ liệu thanh toán của kế toán theo mã booking.
-   - Lệch số tiền: tổng kế toán chi khác chi phí booking
-   - Chi trùng: một booking có từ 2 dòng thanh toán
-   - Thiếu bên KT: booking ghi "Đã thanh toán" nhưng kế toán không có dòng nào
-   - Thiếu bên Booking: kế toán có dòng chi nhưng không tìm thấy booking, hoặc booking chưa nghiệm thu */
+/* ===== 7. Đối soát =====
+   So khớp booking (đã nghiệm thu trở đi) với dữ liệu thanh toán của kế toán theo mã booking:
+   Lệch số tiền · Chi trùng · Thiếu bên kế toán (booking ghi đã TT nhưng KT không có) · Không có booking (KT chi cho mã không tồn tại / chưa nghiệm thu) */
 function recon() {
-  const nt = flt(["st"]).filter(b => b.st >= 2 && b.st <= 4), ids = new Set(nt.map(b => b.id)), byB = new Map();
-  tt.forEach(x => { if (!byB.has(x.maBooking)) byB.set(x.maBooking, []); byB.get(x.maBooking).push(x); });
-  const all = new Map(bk.map(b => [b.id, b])), L = [];
-  nt.forEach(b => {
-    const k = byB.get(b.id) || [], s = k.reduce((a, x) => a + (+x.soTien || 0), 0);
-    if (k.length > 1) L.push([b, "Chi trùng", s, `Kế toán có ${k.length} dòng chi cho booking này`]);
-    else if (k.length == 1 && s != b.cost) L.push([b, "Lệch số tiền", s, s < b.cost ? "Kế toán ghi thiếu" : "Kế toán ghi dư"]);
-    else if (!k.length && b.st == 4) L.push([b, "Thiếu bên KT", null, "Booking ghi đã thanh toán, kế toán chưa ghi nhận"]);
+  const byB = groupBy(tt, x => x.maBooking), all = new Map(bk.map(b => [b.id, b])), L = [];
+  bk.filter(b => b.st >= 2 && b.st <= 4).forEach(b => {
+    const k = byB.get(b.id) || [], s = sum(k, "soTien");
+    if (k.length > 1) L.push({ id: b.id, ten: b.c.ten, bk: b.cost, kt: s, type: "Chi trùng", cls: "t-b", hint: `Kế toán có ${k.length} dòng chi, đề nghị thu hồi khoản trùng` });
+    else if (k.length == 1 && s != b.cost) L.push({ id: b.id, ten: b.c.ten, bk: b.cost, kt: s, type: "Lệch số tiền", cls: "t-w", hint: s < b.cost ? "Kế toán ghi thiếu, đề nghị chi bổ sung" : "Kế toán ghi dư, đề nghị thu hồi hoặc trừ kỳ sau" });
+    else if (!k.length && b.st == 4) L.push({ id: b.id, ten: b.c.ten, bk: b.cost, kt: null, type: "Thiếu bên kế toán", cls: "t-b", hint: "Booking ghi đã thanh toán nhưng kế toán chưa ghi nhận" });
   });
-  byB.forEach((k, id) => {
-    const b = all.get(id);
-    if (!b) { if (F.from <= TODAY) L.push([{ id, c: { ten: "—" }, day: fromIso(k[0].ngayTT) ?? TODAY, cost: null }, "Thiếu bên Booking", k.reduce((a, x) => a + (+x.soTien || 0), 0), "Không tìm thấy mã booking này"]); }
-    else if (b.st < 2 && ids.size >= 0 && b.day >= F.from && b.day <= F.to) L.push([b, "Thiếu bên Booking", k.reduce((a, x) => a + (+x.soTien || 0), 0), "Kế toán đã chi nhưng booking chưa nghiệm thu"]);
-  });
-  return { nt, L };
+  byB.forEach((k, id) => { const b = all.get(id); if (!b || b.st < 2) L.push({ id, ten: b ? b.c.ten : "—", bk: b ? b.cost : null, kt: sum(k, "soTien"), type: "Không có booking", cls: "t-b", hint: b ? "Kế toán đã chi nhưng booking chưa nghiệm thu" : "Không tìm thấy mã booking, kiểm tra lại với kế toán" }); });
+  return { L };
 }
 function rDS() {
-  const { nt, L } = recon(), tot = sum(nt, "cost"), n = t => L.filter(x => x[1] == t).length;
-  kpi("kDS", [["#F1F5F9", "#64748B", "Σ", "Booking cần đối soát", nt.length, null, null], ["#DCFCE7", "#3CD856", "✓", "Không lệch", Math.max(0, nt.length - L.filter(x => ids(x)).length), null, null],
-    ["#FFF4DE", "#FF947A", "≠", "Lệch số tiền", n("Lệch số tiền"), null, null], ["#FFE2E5", "#FA5A7D", "!", "Thiếu hoặc chi trùng", n("Chi trùng") + n("Thiếu bên KT") + n("Thiếu bên Booking"), null, null],
-    ["#F3E8FF", "#BF83FF", "₫", "Tổng tiền đối soát", m(tot), null, null], ["#FEF9C3", "#CA8A04", "⧗", "Chờ thanh toán", m(sum(nt.filter(b => b.st < 4), "cost")), null, null]]);
-  function ids(x) { return nt.includes(x[0]); }
-  $("tDs").innerHTML = "<thead><tr><th>Mã booking</th><th>CTV</th><th>Ngày</th><th class=num>Booking</th><th class=num>Kế toán</th><th class=num>Chênh lệch</th><th>Loại</th><th>Ghi chú</th></tr></thead><tbody>" +
-    (L.length ? L.map(([b, t, kt, g]) => `<tr style="background:${t == "Lệch số tiền" ? "#FFFBF0" : "#FFF5F7"}"><td>${esc(b.id)}</td><td>${esc(b.c.ten)}</td><td>${fmt(b.day)}</td><td class=num>${b.cost == null ? "—" : vnd(b.cost)}</td><td class=num>${kt == null ? "—" : vnd(kt)}</td><td class=num>${kt != null && b.cost != null ? vnd(kt - b.cost) : "—"}</td><td><span class="tag ${t == "Lệch số tiền" ? "t-warn" : "t-bad"}">${t}</span></td><td>${g}</td></tr>`).join("")
-      : emptyRow(8, nt.length ? (tt.length ? "Không có dòng lệch" : "Chưa có dữ liệu thanh toán của kế toán để đối soát") : "Chưa có booking cần đối soát trong bộ lọc này")) + "</tbody>";
-  cPay.data.datasets[0].data = [2, 3, 4].map(i => sum(nt.filter(b => b.st == i), "cost")); cPay.data.datasets[0].backgroundColor = ["#FFCF00", "#FF947A", "#3CD856"].map((c, i) => dim(c, F.st === null || F.st == i + 2)); cPay.update();
-  $("xfNote").innerHTML = `Mọi file sẽ xuất theo bộ lọc đang chọn: <b>${fmtY(F.from)} – ${fmtY(F.to)}</b>${F.k ? " · kênh " + esc(F.k) : ""}${F.c ? " · " + esc(F.c) : ""}${F.n ? " · phụ trách " + esc(F.n) : ""}.`;
+  const pend = bk.filter(b => b.st == 2 || b.st == 3), p2 = pend.filter(b => b.st == 2), p3 = pend.filter(b => b.st == 3), paid = sel().filter(b => b.st == 4), over = pend.filter(b => TODAY - b.day > WAIT), { L } = recon();
+  const net = L.reduce((x, r) => x + (r.kt != null && r.bk != null ? r.kt - r.bk : 0), 0);
+  kpis("kDS", [{ l: "Đã nghiệm thu, chưa đề nghị", v: m(sum(p2, "cost")), s: p2.length + " booking" }, { l: "Đã đề nghị, chờ kế toán chi", v: m(sum(p3, "cost")), s: p3.length + " booking" },
+    { l: "Đã thanh toán trong kỳ", v: m(sum(paid, "cost")), s: paid.length + " booking" }, { l: "Khoản lệch cần xác nhận", v: L.length, s: L.length ? "chênh lệch ròng " + vnd(net) + "đ" : "không có khoản lệch", meter: L.length ? 100 : 0, mc: "#B45309" }]);
+  const AG = [["0–15 ngày", 0, 15], ["16–30 ngày", 16, 30], ["31–45 ngày", 31, 45], ["Trên 45 ngày", 46, 1e9]], inA = (a, g) => a.filter(b => { const x = TODAY - b.day; return x >= g[1] && x <= g[2]; });
+  if (!pend.length) { emptyChart("cAge"); ins("iAge", bk.length ? [["g", "Không có khoản nào đang chờ thanh toán."]] : []); }
+  else {
+    ec("cAge").setOption({ ...ANI, grid: { left: 48, right: 12, top: 30, bottom: 24 }, legend: LEG, tooltip: { ...TIP, trigger: "axis", axisPointer: { type: "shadow", shadowStyle: { color: "#0F172A08" } }, valueFormatter: v => m(v) },
+      xAxis: { type: "category", data: AG.map(g => g[0]), ...AX, splitLine: { show: false } }, yAxis: { type: "value", ...AX, axisLabel: { ...AX.axisLabel, formatter: trM } },
+      series: [{ name: "Chưa đề nghị", type: "bar", stack: "a", barWidth: "42%", data: AG.map(g => sum(inA(p2, g), "cost")), itemStyle: { color: "#CBD5E1" } },
+        { name: "Đã đề nghị", type: "bar", stack: "a", data: AG.map((g, i) => ({ value: sum(inA(p3, g), "cost"), itemStyle: { color: g[1] > WAIT ? "#B45309" : "#1D4ED8", borderRadius: [3, 3, 0, 0] } })) }] }, true);
+    ins("iAge", [["", `Đang chờ thanh toán <b>${m(sum(pend, "cost"))}</b> cho <b>${pend.length}</b> booking.`],
+      over.length ? ["w", `<b>${over.length}</b> booking chờ quá ${WAIT} ngày (<b>${m(sum(over, "cost"))}</b>), nên gửi danh sách nhắc kế toán.`] : ["g", `Không có khoản nào chờ quá ${WAIT} ngày.`],
+      ["", `Đã đề nghị nhưng kế toán chưa chi: <b>${m(sum(p3, "cost"))}</b>.`]]);
+  }
+  $("tLech").innerHTML = `<thead><tr><th>Booking</th><th>CTV</th><th class=num>Theo booking</th><th class=num>Theo kế toán</th><th class=num>Chênh lệch</th><th>Loại</th></tr></thead><tbody>` + (L.length ?
+    L.map(x => `<tr><td>${esc(x.id)}</td><td>${esc(x.ten)}</td><td class=num>${x.bk == null ? "—" : vnd(x.bk)}</td><td class=num>${x.kt == null ? "—" : vnd(x.kt)}</td><td class=num style="font-weight:600;color:${x.bk != null && x.kt != null && x.kt < x.bk ? "#B91C1C" : "#0F172A"}">${x.bk == null || x.kt == null ? "—" : (x.kt - x.bk > 0 ? "+" : "") + vnd(x.kt - x.bk)}</td><td><span class="tag ${x.cls}">${x.type}</span></td></tr><tr class="sub"><td colspan="6">→ ${x.hint}</td></tr>`).join("")
+    : emptyRow(6, tt.length ? "Không có khoản lệch" : "Chưa có dữ liệu thanh toán của kế toán để đối soát")) + "</tbody>";
+  ins("iLech", L.length ? [["w", `<b>${L.length} khoản</b> cần kế toán xác nhận, chênh lệch ròng <b>${vnd(net)}đ</b>.`], ["", "Đề xuất: xuất file đối soát gửi kế toán trước ngày chốt sổ."]] : (tt.length ? [["g", "Số liệu booking và kế toán đã khớp."]] : []));
 }
 
-/* ===== 9. Điều hướng, khởi động ===== */
+/* ===== 8. CTV & Booking ===== */
+let selCtv = null, selSt = null;
+const warn = c => { const w = []; if (!c.stk) w.push("Thiếu STK"); if (!c.cccd) w.push("Thiếu CCCD"); if (c.dup) w.push("Trùng SĐT"); return w; };
+["q", "fT", "fW"].forEach(i => $(i).oninput = rCB);
+function rCB() {
+  const B = sel(), P = sel(prev()), cnt = new Map(); B.forEach(b => cnt.set(b.c, (cnt.get(b.c) || 0) + 1));
+  const posted = x => x.filter(b => b.posted).length, late = x => x.filter(b => b.late0).length;
+  kpis("kCB", [{ l: "CTV đang active", v: ctv.filter(c => c.tt == "Active").length, s: `trên ${ctv.length} CTV` }, { l: "Booking mới", v: B.length, ...chg(B.length, P.length), s: "so với kỳ trước" },
+    { l: "Đã đăng bài", v: posted(B), s: B.length ? (posted(B) / B.length * 100).toFixed(0) + "% số booking" : "" }, { l: "Quá deadline chưa đăng", v: late(B), s: late(B) ? "cần nhắc CTV" : "không có", meter: late(B) ? 100 : 0, mc: "#B91C1C" }]);
+  const q = $("q").value.toLowerCase(), ft = $("fT").value, fw = $("fW").checked;
+  const L = ctv.filter(c => (!S.k || c.kenh == S.k) && (!S.n || c.ns == S.n) && (!q || (c.id + c.ten + c.sdt).toLowerCase().includes(q)) && (!ft || c.tt == ft) && (!fw || warn(c).length)).sort((a, b) => (cnt.get(b) || 0) - (cnt.get(a) || 0));
+  $("nCtv").textContent = L.length;
+  $("tCtv").innerHTML = `<thead><tr><th>Mã</th><th>Họ tên</th><th>Kênh</th><th class=num>Booking</th><th>Trạng thái</th><th>Cảnh báo</th></tr></thead><tbody>` + (L.length ? L.slice(0, 500).map(c =>
+    `<tr class="x ${selCtv === c ? "sel" : ""}" data-i="${ctv.indexOf(c)}"><td style="color:#64748B">${esc(c.id)}</td><td style="font-weight:500">${esc(c.ten)}</td><td>${esc(c.kenh)}</td><td class=num>${cnt.get(c) || 0}</td><td><span class="tag ${c.tt == "Active" ? "t-g" : c.tt == "Tạm dừng" ? "t-w" : "t-b"}">${esc(c.tt)}</span></td><td>${warn(c).map(x => `<span class="tag t-b">${x}</span>`).join(" ")}</td></tr>`).join("")
+    : emptyRow(6, ctv.length ? "Không có CTV khớp bộ lọc" : "Chưa có CTV nào")) + "</tbody>";
+  $("tCtv").querySelectorAll("tr.x").forEach(t => t.onclick = () => { const c = ctv[t.dataset.i]; selCtv = selCtv === c ? null : c; rCB(); });
+  const BS = selCtv ? B.filter(b => b.c === selCtv) : B;
+  $("stChips").innerHTML = `<span class="chip ${selSt === null ? "on" : ""}" data-i="">Tất cả ${BS.length}</span>` + ST.map((x, i) => `<span class="chip ${selSt === i ? "on" : ""}" data-i="${i}">${x} ${BS.filter(b => b.st == i).length}</span>`).join("");
+  $("stChips").querySelectorAll(".chip").forEach(c => c.onclick = () => { selSt = c.dataset.i === "" ? null : (selSt === +c.dataset.i ? null : +c.dataset.i); rCB(); });
+  const BB = BS.filter(b => selSt === null || b.st == selSt), c = selCtv;
+  $("bkT").innerHTML = (c ? "Booking của " + esc(c.ten) : "Booking") + ` <small>${BB.length}</small>`;
+  $("prof").innerHTML = c ? `<div class="prof"><span>Mã <b>${esc(c.id)}</b></span><span>SĐT <b>${esc(c.sdt)}</b></span><span>Kênh <b>${esc(c.kenh)}</b></span><span>Follower <b>${vnd(c.fl)}</b></span><span>Ngành <b>${esc(c.nganh)}</b></span><span>Rate <b>${vnd(c.rate)}</b></span><span>Phụ trách <b>${esc(c.ns)}</b></span></div>` : "";
+  const SC = ["t-m", "t-n", "t-w", "t-w", "t-g", "t-b"];
+  $("tBk").innerHTML = `<thead><tr><th>Mã</th>${c ? "" : "<th>CTV</th>"}<th>Chiến dịch</th><th>Ngày book</th><th class=num>Chi phí</th><th class=num>GMV</th><th>Trạng thái</th></tr></thead><tbody>` + (BB.length ?
+    BB.slice(0, 300).map(b => `<tr><td style="color:#64748B">${esc(b.id)}</td>${c ? "" : `<td>${esc(b.c.ten)}</td>`}<td>${esc(b.camp)}</td><td>${fmt(b.day)}</td><td class=num>${vnd(b.cost)}</td><td class=num>${vnd(b.gmv)}</td><td><span class="tag ${SC[b.st]}">${ST[b.st]}</span>${b.late0 ? ' <span class="tag t-b">Trễ</span>' : ""}</td></tr>`).join("") : emptyRow(7)) + "</tbody>";
+}
+
+/* ===== 9. Xuất file, điều hướng, khởi động ===== */
+function rXF() { $("xfNote").innerHTML = `Mọi file sẽ xuất theo bộ lọc đang chọn: <b>${fmt(S.from)}/${dd(S.from).getUTCFullYear()} – ${fmt(S.to)}/${dd(S.to).getUTCFullYear()}</b>${S.k ? " · kênh " + esc(S.k) : ""}${S.n ? " · phụ trách " + esc(S.n) : ""}.`; }
 document.querySelectorAll("[data-soon]").forEach(b => b.onclick = () => toast("Chức năng này sẽ làm ở bước sau"));
-document.querySelector("#ds .btn.pri:not([data-soon])")?.addEventListener("click", () => { renderAll(); toast("Đã chạy lại đối soát"); });
-document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
-  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("active", x === b));
-  document.querySelectorAll("section").forEach(x => x.classList.toggle("on", x.id == b.dataset.s)); renderAll();
-});
-function renderAll() { rSlicer(); rTQ(); rCB(); rHS(); rDS(); }
-const U = CFG.nguoiDung || {}; $("avN").textContent = U.ten || ""; $("avR").textContent = U.vaiTro || ""; $("avI").textContent = (U.ten || "?")[0];
+let tab = "tq";
+$("tabs").querySelectorAll("button").forEach(b => b.onclick = () => { tab = b.dataset.s; $("tabs").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id == tab)); $("bar").style.display = tab == "cv" ? "none" : ""; render(); });
+function render() {
+  $("pre").querySelectorAll("span").forEach(e => e.classList.toggle("on", e.dataset.p == S.pre)); $("dF").value = iso(S.from); $("dT").value = iso(S.to); $("fK").value = S.k; $("fN").value = S.n;
+  const p = prev(); $("cmp").textContent = `${S.to - S.from + 1} ngày · so với ${fmt(p.from)}–${fmt(p.to)}`;
+  ({ tq: rTQ, hs: rHS, ds: rDS, cb: rCB, xf: rXF, cv: () => window.KOC_TASKS && window.KOC_TASKS.render() })[tab]();
+}
+const U = CFG.nguoiDung || {}; $("who").innerHTML = `<b>${esc(U.ten || "")}</b> · ${esc(U.vaiTro || "")}`;
 DEMO = /[?&]demo=1/.test(location.search);
-load(DEMO ? window.makeDemoData(TODAY_ISO) : window.KOC_DATA);
+load(DEMO ? window.makeDemoData(TISO) : window.KOC_DATA);
+window.KOC_APP = { todos, today: TODAY, iso, fromIso, fmt, esc, toast };
 setPre(CFG.mocMacDinh || "30");
 })();
