@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KOC Booking Hub · Bigx</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+
+<div class="status" id="status"></div>
+<header>
+<div class="logo"><i>K</i>KOC Hub</div>
+<nav class="tabs">
+<button data-s="tq" class="active">Tổng quan</button>
+<button data-s="cb">CTV & Booking</button>
+<button data-s="hs">Hiệu suất</button>
+<button data-s="ds">Đối soát kế toán</button>
+<button data-s="xf">Xuất file</button>
+</nav>
+<div class="av"><i id="avI">A</i><div><b id="avN">Anna</b><small id="avR">Leader Booking</small></div></div>
+</header>
+<div class="slicer">
+<span class="lb">Thời gian</span>
+<div class="seg" id="pre"><span data-p="7">7 ngày</span><span data-p="14">14 ngày</span><span data-p="30">1 tháng</span><span data-p="m">Tháng này</span><span data-p="all">Tất cả</span></div>
+<span class="lb">Từ</span><input type="date" id="dF"><span class="lb">đến</span><input type="date" id="dT">
+<span class="cmp" id="cmp"></span>
+<span class="sep"></span>
+<select id="fK"><option value="">Tất cả kênh</option></select>
+<select id="fC"><option value="">Tất cả chiến dịch</option></select>
+<select id="fN"><option value="">Tất cả phụ trách</option></select>
+<div class="pills" id="pills"></div>
+<span class="clr" id="clr">Xoá lọc</span>
+</div>
+
+<main>
+<!-- ===== TỔNG QUAN ===== -->
+<section id="tq" class="on">
+<div class="kpis" id="kTQ"></div>
+<div class="row" style="grid-template-columns:2fr 1fr 1fr;grid-template-rows:1fr 1fr">
+<div class="card" style="grid-row:1"><div class="ct"><h3>Chi phí và GMV theo thời gian</h3><span class="cs" id="gran" style="margin:0"></span></div><div class="cs">Bấm vào một mốc để xem riêng khoảng đó</div><div class="ch"><canvas id="cTrend"></canvas></div></div>
+<div class="card"><div class="ct"><h3>Theo kênh</h3></div><div class="cs">Bấm cột để lọc kênh</div><div class="ch"><canvas id="cKenh"></canvas></div></div>
+<div class="card"><div class="ct"><h3>Trạng thái booking</h3></div><div class="cs">Bấm lát để lọc</div><div class="ch"><canvas id="cSt"></canvas></div></div>
+<div class="card"><div class="ct"><h3>Top CTV theo GMV</h3></div><div class="cs">Bấm dòng để lọc theo CTV</div><div class="tw"><table id="tTop"></table></div></div>
+<div class="card"><div class="ct"><h3>Theo chiến dịch</h3></div><div class="cs">Bấm cột để lọc</div><div class="ch"><canvas id="cCamp"></canvas></div></div>
+<div class="card"><div class="ct"><h3>Cần xử lý</h3></div><div class="cs">Trong khoảng thời gian đang chọn</div><div class="tw" id="alerts"></div></div>
+</div>
+</section>
+
+<!-- ===== CTV & BOOKING ===== -->
+<section id="cb">
+<div class="kpis" id="kCB"></div>
+<div class="row" style="grid-template-columns:1fr 1.35fr">
+<div class="card"><div class="ct"><h3>Danh sách CTV <span class="tag t-mute" id="nCtv"></span></h3><button class="btn pri" data-soon="1">+ Thêm CTV</button></div>
+<div class="tool" style="margin-top:6px"><input type="text" id="q" placeholder="Tìm tên, SĐT, mã CTV…"><select id="fT"><option value="">Mọi trạng thái</option><option>Active</option><option>Tạm dừng</option><option>Blacklist</option></select><label style="font-size:11px"><input type="checkbox" id="fW"> Có cảnh báo</label></div>
+<div class="tw"><table id="tCtv"></table></div></div>
+<div class="card"><div class="ct"><h3 id="bkT">Booking</h3><div><button class="btn" data-soon="1">Import Excel</button> <button class="btn pri" data-soon="1">+ Thêm booking</button></div></div>
+<div class="chips" id="chips" style="margin:6px 0"></div><div id="prof"></div>
+<div class="tw"><table id="tBk"></table></div></div>
+</div>
+</section>
+
+<!-- ===== HIỆU SUẤT ===== -->
+<section id="hs">
+<div class="kpis" id="kHS"></div>
+<div class="row" style="grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr">
+<div class="card"><div class="ct"><h3>Top 10 CTV</h3><select id="hMet"><option value="roi">theo ROI</option><option value="g">theo GMV</option><option value="d">theo Đơn</option><option value="v">theo View</option></select></div><div class="cs">Bấm cột để lọc theo CTV</div><div class="ch"><canvas id="cTop"></canvas></div></div>
+<div class="card"><div class="ct"><h3>Chi phí và GMV từng CTV</h3></div><div class="cs">Mỗi chấm là 1 CTV, chấm cao bên trái là hiệu quả</div><div class="ch"><canvas id="cSc"></canvas></div></div>
+<div class="card"><div class="ct"><h3>Kế hoạch và thực chi</h3></div><div class="cs" id="planLeg">Ngân sách booking</div><div class="ch"><canvas id="cPlan"></canvas></div></div>
+<div class="card"><div class="ct"><h3>Tỷ lệ đăng đúng hạn</h3></div><div class="cs">Mục tiêu 90% (nét đứt)</div><div class="ch"><canvas id="cOn"></canvas></div></div>
+<div class="card" style="grid-column:span 2"><div class="ct"><h3>Bảng hiệu suất CTV</h3></div><div class="cs">Bấm tiêu đề để sắp xếp, bấm dòng để lọc. Cờ đỏ: ROI &lt; 1 hoặc trễ hạn từ 2 lần.</div><div class="tw"><table id="tHs"></table></div></div>
+</div>
+</section>
+
+<!-- ===== ĐỐI SOÁT ===== -->
+<section id="ds">
+<div class="kpis" id="kDS"></div>
+<div class="row" style="grid-template-columns:2fr 1fr">
+<div class="card"><div class="ct"><h3>Chi tiết các dòng lệch</h3><div><button class="btn" data-soon="1">Upload file kế toán</button> <button class="btn pri">Chạy đối soát</button></div></div><div class="cs">So khớp booking đã nghiệm thu với dữ liệu thanh toán của kế toán, trong khoảng thời gian đang chọn</div><div class="tw"><table id="tDs"></table></div></div>
+<div class="card"><div class="ct"><h3>Tiền theo trạng thái</h3></div><div class="cs">Đã nghiệm thu, chờ thanh toán, đã thanh toán</div><div class="ch"><canvas id="cPay"></canvas></div></div>
+</div>
+</section>
+
+<!-- ===== XUẤT FILE ===== -->
+<section id="xf">
+<div class="xf">
+<div class="card"><h3 style="margin:0 0 4px">File đối soát kế toán</h3><div class="cs">Sheet Tổng hợp và sheet Chi tiết lệch (tô màu)</div><button class="btn pri" style="align-self:start" data-soon="1">Tải Excel</button></div>
+<div class="card"><h3 style="margin:0 0 4px">Danh sách CTV cho nhân sự</h3><div class="cs">Active, mới onboard, dừng hợp tác. Đã ẩn STK, CCCD.</div><button class="btn pri" style="align-self:start" data-soon="1">Tải Excel</button></div>
+<div class="card"><h3 style="margin:0 0 4px">Report hiệu suất</h3><div class="cs">KPI, theo kênh, theo CTV, so với kỳ trước</div><button class="btn pri" style="align-self:start" data-soon="1">Tải Excel</button></div>
+<div class="card"><h3 style="margin:0 0 4px">Đề nghị thanh toán</h3><div class="cs">Booking đã nghiệm thu, kèm STK, thuế, thực nhận</div><button class="btn pri" style="align-self:start" data-soon="1">Tải Excel</button></div>
+</div>
+<div class="cs" id="xfNote"></div>
+</section>
+</main>
+
+<div class="toast" id="toast"></div>
+<!-- Thứ tự nạp: cấu hình -> dữ liệu -> data mẫu -> ứng dụng -->
+<script src="config.js"></script>
+<script src="data.js"></script>
+<script src="demo-data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
